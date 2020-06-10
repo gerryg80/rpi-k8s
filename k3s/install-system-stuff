@@ -1,0 +1,12 @@
+#!/bin/bash
+
+helm install metallb stable/metallb --namespace kube-system \
+  --set configInline.address-pools[0].name=default \
+  --set configInline.address-pools[0].protocol=layer2 \
+  --set configInline.address-pools[0].addresses[0]=192.168.0.240-192.168.0.250
+
+helm install nginx-ingress stable/nginx-ingress --namespace kube-system \
+    --set controller.image.repository=quay.io/kubernetes-ingress-controller/nginx-ingress-controller-arm \
+    --set controller.image.tag=0.25.1 \
+    --set controller.image.runAsUser=33 \
+    --set defaultBackend.enabled=false

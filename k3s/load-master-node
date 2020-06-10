@@ -1,0 +1,38 @@
+#!/bin/bash
+
+wait_cycle_time=5
+max_wait_cycles=20
+wait_cycle=0
+
+ssh frodo 'export K3S_KUBECONFIG_MODE="644"
+export INSTALL_K3S_EXEC=" --no-deploy servicelb --no-deploy traefik"
+curl -sfL https://get.k3s.io | sh -'
+
+while true; do
+    status=$(ssh frodo 'sudo systemctl status k3s' | grep -E '^\s+Active')
+    
+    if [[ "$status" =~ "active (running)" ]]; then
+        break
+    fi
+
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ"): $status"
+    wait_cycle=$(($wait_cycle+1))
+
+    if [ $wait_cycle -ge $max_wait_cycles ]; then
+        echo 'Max wait time exceeded - aborting cluster standup'
+        exit 1
+    fi
+
+    sleep $wait_cycle_time
+done
+
+echo 'Master node create is successful'
+
+scp frodo:/etc/rancher/k3s/k3s.yaml ~/.kube/hobbits-config
+
+sed -i 's/127\.0\.0\.1/frodo/' ~/.kube/hobbits-config
+
+token=$(ssh frodo 'sudo cat /var/lib/rancher/k3s/server/node-token')
+
+echo $token
+

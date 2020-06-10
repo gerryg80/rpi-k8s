@@ -1,0 +1,97 @@
+#!/bin/bash
+
+# Script to re-flash the micro-sd cards for a 4 node cluster
+# This script is meant as an example only - it has physical paths and file names embedded in it that will not match your install
+# Use it to see the progression of commands but make sure to understand each command
+# Recommend running each command outside the script before putting it all back together.
+# 
+# This installs Ubuntu 20.04 - it is meant to run from an Ubuntu Desktop install with an sd card reader
+
+# Before running this script you should:
+#    1. Get all pi's configured and plugged in to ethernet
+#    2. Physically label each PI - I added a label to the plate they are mounted on in my stack
+#    3. Also a good idea to label the power supplies and ethernet cables
+#    4. Flash one micro-sd card manually (doesn't matter which OS)
+#    5. Open your router UI so you can use it to reserve an IP address per node - this will tie the IP to the mac address of the PI
+#    6. Boot each node with the card and record / reserve the IP address
+#    7. Record that IP and a host name in your /etc/hosts for each "hobbit" or whatever name you use
+#    8. Make sure you know which drive the SD card will show up on when plugged in (in my case /dev/sdg)
+
+hobbit_name=$1
+
+if [ -z "$hobbit_name" ]; then
+    echo 'You must name the hobbit, precious'
+    exit 1
+fi
+
+# validate the name is in our set before proceeding
+if [[ ! $hobbit_name =~ ^(frodo|samwise|meriadoc|peregrin)$ ]]; then
+    echo "I don't know the hobbit $hobbit_name, precious"
+    exit 1
+fi
+
+# kill any existing entries in known_hosts since we're about to destroy and rebuild the card for this host
+#   note this issue could be avoided somewhat by disabling strict host checking for these IPs and hostnames
+ssh-keygen -f "/home/gerry/.ssh/known_hosts" -R "$hobbit_name"
+ssh-keygen -f "/home/gerry/.ssh/known_hosts" -R "$(grep $hobbit_name /etc/hosts | awk '{ print $1 }')"
+
+# unmount the micro-sd partitions - make sure this agrees with your device name!
+sudo umount /dev/sdg1
+sudo umount /dev/sdg2
+
+# use these commands to retrieve a fresh image if needed
+# curl -sLO http://cdimage.ubuntu.com/releases/20.04/release/ubuntu-20.04-preinstalled-server-arm64+raspi.img.xz
+# unxz ubuntu-20.04-preinstalled-server-arm64+raspi.img.xz 
+
+# flash the image file to the micro-sd
+sudo dd bs=4M if=/home/gerry/rpi/images/ubuntu-20.04-preinstalled-server-arm64+raspi.img of=/dev/sdg conv=fsync status=progress
+
+# sync to be sure it's flushed
+sudo sync
+
+# now virtually eject and then toggle the tray to remount
+sudo eject /dev/sdg
+sleep 2
+sudo eject -t /dev/sdg
+sleep 2
+
+# update the host name
+echo "$hobbit_name" | sudo tee /media/gerry/writable/etc/hostname > /dev/null
+
+# create the file to trigger ssh on first boot
+touch /media/gerry/system-boot/ssh
+
+# update the user-data to create me and update ubuntu on first boot
+cat << EOF > /media/gerry/system-boot/user-data
+#cloud-config
+
+users:
+  - name: gerry
+    gecos: Gerry the Magnificent
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    primary_group: gerry
+    groups: users, admin
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQCsiVGnazdqgDskq8meZHtGC7KkMEhyRzTUfbla3rfSef6DVuExPxwfipaWoCceQeptO0TUH3BntqR8jG5m6rsqxNl0pOpqikaK2byeJWmac8+wRfCh/oS3LSlBUpQSqHft7WS+gG1FGrGoMXM/7OjuJsp8tynk1dP3dOcIfRJsRDFgo4Lx/BcfJ7kW/X0pFrM4F1Gy6EQfl6XXRplmgxIeODfFjeqv1DFq8o6Fcg+VXn4fv6u5Fd8rgYDcaOnZ5WOuzdYtiqCCx9OglSMBqUL8K/+QR+lBHbKuFEOl7w4plF+BEDB2pahlP0Pt17NtUfLmRMPedYr/GecECC2LjBkwdd4Ca5aofBMv0I0CK2L0l9f6UKMduFffUr7tPh5+KvEtbXhGHLLSo6y2Feq9BQYBnBpsTM98+HI0vVxKttEQxrBjLBzwCWeQXuBIkbNZI7aZ22LwDv/+YIz2YG79eX13otHr1s6uRDWHWxHku7QfKy8pxqMldcp4PPluxsVJVnlyfQVQR7fXACmYIaZ4kaHUwM+4pXT1n+1lNad5yMkRdRfkPlgGpO2lFzIoltpsKhrlYVtWkOn7bCEbwlrV0EUks0PSnAKbrFATLInYJ8B14azrjLoJnW6yS4v+plBvRfugqS5ymSUvsu2fOyTa0QCxWgyPDnXuCBUOrZ8taB3P9Q== gerry@Aragorn
+
+## Update apt database and upgrade packages on first boot
+package_update: true
+package_upgrade: true
+
+EOF
+
+# Patch inputrc to restore sane behavior of command line tabbing and auto-complete
+sudo sed -i '$ a\
+set completion-ignore-case On\nTAB: menu-complete\n"\\e[Z": menu-complete-backward' /media/gerry/writable/etc/inputrc
+
+# update the cmdline.txt file to add the memory options for k3s
+#  all options have to be on the first line of the file
+sed -i '1 s/$/ cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory/' /media/gerry/system-boot/cmdline.txt
+
+# sync to be sure it's flushed
+sudo sync
+
+# and virtually eject the micro-sd card
+sudo eject /dev/sdg
